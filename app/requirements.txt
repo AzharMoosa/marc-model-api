@@ -1,0 +1,9 @@
+torch==1.9.1
+transformers
+onnx
+onnxruntime==1.10.0
+fastt5
+psutil
+fastapi
+pydantic
+six
