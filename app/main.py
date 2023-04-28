@@ -34,10 +34,10 @@ tokenizer = AutoTokenizer.from_pretrained(path_to_model)
 
 
 def answer_question(question, m, t):
-    encoded_text = t.encode(question, return_tensors="pt")
+    encoded_text = t.encode(question, return_tensors="pt").cpu()
     model_output = m.generate(
-        encoded_text, do_sample=True, top_p=0.9, max_length=512)
-    answer = t.decode(model_output[0], skip_special_tokens=True)
+        encoded_text, do_sample=True, top_p=0.9, max_length=512).cpu()
+    answer = t.decode(model_output[0], skip_special_tokens=True).cpu()
     return answer
 
 
@@ -48,6 +48,9 @@ def index():
 
 @app.post("/solve-math-problem", response_model=QuestionResponse)
 def solve_math_problem(request: QuestionRequest):
-    question = request.question
-    answer = answer_question(question, model, tokenizer)
-    return QuestionResponse(answer)
+    try:
+        question = request.question
+        answer = answer_question(question, model, tokenizer)
+        return QuestionResponse(answer)
+    except:
+        return QuestionResponse("SERVER ERROR")
