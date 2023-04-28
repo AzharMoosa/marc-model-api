@@ -34,9 +34,9 @@ tokenizer = AutoTokenizer.from_pretrained(path_to_model)
 
 
 def answer_question(question, m, t):
-    encoded_text = t.encode(question, return_tensors="pt").cuda()
+    encoded_text = t.encode(question, return_tensors="pt")
     model_output = m.generate(
-        encoded_text, do_sample=True, top_p=0.9, max_length=512).cpu()
+        encoded_text, do_sample=True, top_p=0.9, max_length=512)
     answer = t.decode(model_output[0], skip_special_tokens=True)
     return answer
 
