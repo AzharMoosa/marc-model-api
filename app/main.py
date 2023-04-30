@@ -1,9 +1,11 @@
-from fastT5 import get_onnx_model, get_onnx_runtime_sessions, OnnxT5
-from transformers import AutoTokenizer
+# from fastT5 import get_onnx_model, get_onnx_runtime_sessions, OnnxT5
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from pathlib import Path
 import os
 from fastapi import FastAPI
 from pydantic import BaseModel
+
+__location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
 
 app = FastAPI()
 
@@ -19,25 +21,27 @@ class QuestionResponse(BaseModel):
 path_to_model = "./marc"
 model_name = Path(path_to_model).stem
 
-path_to_encoder = os.path.join(
-    path_to_model, f"{model_name}-encoder-quantized.onnx")
-path_to_decoder = os.path.join(
-    path_to_model, f"{model_name}-decoder-quantized.onnx")
+path_to_encoder = os.path.join(path_to_model, f"{model_name}-encoder-quantized.onnx")
+path_to_decoder = os.path.join(path_to_model, f"{model_name}-decoder-quantized.onnx")
 path_to_init_decoder = os.path.join(
-    path_to_model, f"{model_name}-init-decoder-quantized.onnx")
+    path_to_model, f"{model_name}-init-decoder-quantized.onnx"
+)
 
-model_paths = path_to_encoder, path_to_decoder, path_to_init_decoder
-model_sessions = get_onnx_runtime_sessions(model_paths)
+# model_paths = path_to_encoder, path_to_decoder, path_to_init_decoder
+# model_sessions = get_onnx_runtime_sessions(model_paths)
+# model = OnnxT5(path_to_model, model_sessions)
+# tokenizer = AutoTokenizer.from_pretrained(path_to_model)
 
-model = OnnxT5(path_to_model, model_sessions)
-tokenizer = AutoTokenizer.from_pretrained(path_to_model)
+path_to_model = f"{__location__}/model_and_tokenizer/model"
+path_to_tokenizer = f"{__location__}/model_and_tokenizer/tokenizer"
+tokenizer = AutoTokenizer.from_pretrained(path_to_tokenizer)
+model = AutoModelForSeq2SeqLM.from_pretrained(path_to_model)
 
 
 def answer_question(question, m, t):
-    encoded_text = t.encode(question, return_tensors="pt").cpu()
-    model_output = m.generate(
-        encoded_text, do_sample=True, top_p=0.9, max_length=512).cpu()
-    answer = t.decode(model_output[0], skip_special_tokens=True).cpu()
+    encoded_text = t.encode(question, return_tensors="pt")
+    model_output = m.generate(encoded_text, do_sample=True, top_p=0.9, max_length=512)
+    answer = t.decode(model_output[0], skip_special_tokens=True)
     return answer
 
 
@@ -51,6 +55,6 @@ def solve_math_problem(request: QuestionRequest):
     try:
         question = request.question
         answer = answer_question(question, model, tokenizer)
-        return QuestionResponse(answer)
+        return QuestionResponse(answer=answer)
     except:
-        return QuestionResponse("SERVER ERROR")
+        return QuestionResponse(answer="SERVER ERROR")

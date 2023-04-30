@@ -1,8 +1,8 @@
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, T5Config
 from fastT5 import export_and_get_onnx_model, generate_onnx_representation, quantize
 import os
-__location__ = os.path.realpath(os.path.join(
-    os.getcwd(), os.path.dirname(__file__)))
+
+__location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
 
 path_to_model = f"{__location__}/model_and_tokenizer/model"
 path_to_tokenizer = f"{__location__}/model_and_tokenizer/tokenizer"
@@ -13,9 +13,10 @@ model = AutoModelForSeq2SeqLM.from_pretrained(path_to_model)
 
 
 def answer_question(question):
-    encoded_text = tokenizer.encode(question, return_tensors="pt").cpu()
+    encoded_text = tokenizer.encode(question, return_tensors="pt")
     model_output = model.generate(
-        encoded_text, do_sample=True, top_p=0.9, max_length=512).cpu()
+        encoded_text, do_sample=True, top_p=0.9, max_length=512
+    )
     answer = tokenizer.decode(model_output[0], skip_special_tokens=True)
     return answer
 
@@ -34,5 +35,6 @@ def quantize_model():
 
 
 a = answer_question(
-    "John has 2 apples and gives away 1. How many apples does John have now?")
+    "John has 2 apples and gives away 1. How many apples does John have now?"
+)
 print(a)
