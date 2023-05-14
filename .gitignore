@@ -58,5 +58,6 @@ venv_old/
 
 wandb/
 
-app/model_and_tokenizer/
+app/**/model/
+app/**/tokenizer/
 app/marc

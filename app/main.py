@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 from fastapi import FastAPI
 from pydantic import BaseModel
+from typing import List
 import re
 
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
@@ -18,11 +19,27 @@ class QuestionResponse(BaseModel):
     answer: str
 
 
-path_to_model = f"{__location__}/model"
-path_to_tokenizer = f"{__location__}/tokenizer"
+class TextToQuestionRequest(BaseModel):
+    context: str
+    answer: str
+    number_of_questions: int = 1
 
-tokenizer = AutoTokenizer.from_pretrained(path_to_tokenizer)
-model = AutoModelForSeq2SeqLM.from_pretrained(path_to_model)
+
+class TextToQuestionResponse(BaseModel):
+    question: List[str]
+
+
+path_to_math_model = f"{__location__}/math/model"
+path_to_math_tokenizer = f"{__location__}/math/tokenizer"
+
+path_to_question_gen_model = f"{__location__}/question_generation/model"
+path_to_question_gen_tokenizer = f"{__location__}/question_generation/tokenizer"
+
+math_tokenizer = AutoTokenizer.from_pretrained(path_to_math_tokenizer)
+math_model = AutoModelForSeq2SeqLM.from_pretrained(path_to_math_model)
+
+question_gen_tokenizer = AutoTokenizer.from_pretrained(path_to_question_gen_tokenizer)
+question_gen_model = AutoModelForSeq2SeqLM.from_pretrained(path_to_question_gen_model)
 
 
 def clean_up_calculations(text):
@@ -59,13 +76,41 @@ def clean_up_calculations(text):
 
 
 def answer_question(question):
-    encoded_text = tokenizer.encode(question, return_tensors="pt")
-    model_output = model.generate(
+    question = f"solve: {question}"
+    encoded_text = math_tokenizer.encode(question, return_tensors="pt")
+    model_output = math_model.generate(
         encoded_text, do_sample=True, top_p=0.9, max_length=256
     )
-    answer = tokenizer.decode(model_output[0], skip_special_tokens=True)
+    answer = math_tokenizer.decode(model_output[0], skip_special_tokens=True)
     answer = clean_up_calculations(answer)
     return answer
+
+
+def text_to_question(context, answer, number_of_questions):
+    text = f"context: {context} answer: {answer} </s>"
+
+    encoding = question_gen_tokenizer.encode_plus(
+        text, max_length=512, padding=True, return_tensors="pt"
+    )
+    input_ids, attention_mask = encoding["input_ids"], encoding["attention_mask"]
+
+    question_gen_model.eval()
+
+    beam_search_output = question_gen_model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_length=72,
+        early_stopping=True,
+        num_beams=5,
+        num_return_sequences=min(number_of_questions, 4),
+    )
+
+    return [
+        question_gen_tokenizer.decode(
+            beam_output, skip_special_tokens=True, clean_up_tokenization_spaces=True
+        )
+        for beam_output in beam_search_output
+    ]
 
 
 @app.get("/")
@@ -81,3 +126,15 @@ def solve_math_problem(request: QuestionRequest):
         return QuestionResponse(answer=answer)
     except:
         return QuestionResponse(answer="SERVER ERROR")
+
+
+@app.post("/generate-question", response_model=TextToQuestionResponse)
+def generate_question(request: TextToQuestionRequest):
+    try:
+        context = request.context
+        answer = request.answer
+        number_of_questions = request.number_of_questions
+        question = text_to_question(context, answer, number_of_questions)
+        return TextToQuestionResponse(question=question)
+    except:
+        return TextToQuestionResponse(question="SERVER ERROR")
