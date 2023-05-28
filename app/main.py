@@ -50,149 +50,154 @@ verifier_tokenizer = AutoTokenizer.from_pretrained(path_to_verifier_tokenizer)
 verifier_model = AutoModelForSeq2SeqLM.from_pretrained(path_to_verifier_model)
 
 
-def clean_up_calculations(text):
-    CALCULATOR_PATTERN = r"\d+[+/*x-]\d+=\d+>>\d+"
-    FINAL_ANSWER_NUMBER_PATTERN = r"\d+\S*$"
-    NO_SPACE_EQUATION_PATTERN = r"(\d+)([+\-*/])(\d+)"
+class MathSolver:
+    @staticmethod
+    def clean_up_calculations(text):
+        CALCULATOR_PATTERN = r"\d+[+/*x-]\d+=\d+>>\d+"
+        FINAL_ANSWER_NUMBER_PATTERN = r"\d+\S*$"
+        NO_SPACE_EQUATION_PATTERN = r"(\d+)([+\-*/])(\d+)"
 
-    # Find All Calculator Notions Of Form "X+Y=Z>>Z"
-    calculator_notation = re.findall(CALCULATOR_PATTERN, text)
+        # Find All Calculator Notions Of Form "X+Y=Z>>Z"
+        calculator_notation = re.findall(CALCULATOR_PATTERN, text)
 
-    if not calculator_notation:
+        if not calculator_notation:
+            return text
+
+        correct_answer = None
+
+        for notation in calculator_notation:
+            # Replace "X+Y=Z>>Z" To Evaluated Value "X+Y"
+            expression = notation.split(">>")
+            equation = expression[0].strip()
+            lhs = equation.split("=")
+            if not lhs:
+                continue
+            correct_answer = eval(lhs[0])
+            text = text.replace(notation, str(correct_answer))
+
+        # Verify Final Answer Is Same As Final Calculation
+        if correct_answer and re.search(FINAL_ANSWER_NUMBER_PATTERN, text):
+            text = re.sub(FINAL_ANSWER_NUMBER_PATTERN, str(correct_answer), text)
+
+        # Add Space Between Equations: "X+Y=Z" => "X + Y = Z"
+        text = re.sub(NO_SPACE_EQUATION_PATTERN, r"\1 \2 \3", text)
+
         return text
 
-    correct_answer = None
-
-    for notation in calculator_notation:
-        # Replace "X+Y=Z>>Z" To Evaluated Value "X+Y"
-        expression = notation.split(">>")
-        equation = expression[0].strip()
-        lhs = equation.split("=")
-        if not lhs:
-            continue
-        correct_answer = eval(lhs[0])
-        text = text.replace(notation, str(correct_answer))
-
-    # Verify Final Answer Is Same As Final Calculation
-    if correct_answer and re.search(FINAL_ANSWER_NUMBER_PATTERN, text):
-        text = re.sub(FINAL_ANSWER_NUMBER_PATTERN, str(correct_answer), text)
-
-    # Add Space Between Equations: "X+Y=Z" => "X + Y = Z"
-    text = re.sub(NO_SPACE_EQUATION_PATTERN, r"\1 \2 \3", text)
-
-    return text
-
-
-def answer_question(question):
-    question = f"solve: {question}"
-    encoded_text = math_tokenizer.encode(question, return_tensors="pt")
-    model_output = math_model.generate(
-        encoded_text, do_sample=True, top_p=0.9, max_length=256
-    )
-    answer = math_tokenizer.decode(model_output[0], skip_special_tokens=True)
-    answer = clean_up_calculations(answer)
-    return answer
-
-
-def text_to_question(context, answer, number_of_questions):
-    text = f"context: {context} answer: {answer} </s>"
-
-    encoding = question_gen_tokenizer.encode_plus(
-        text, max_length=512, padding=True, return_tensors="pt"
-    )
-    input_ids, attention_mask = encoding["input_ids"], encoding["attention_mask"]
-
-    question_gen_model.eval()
-
-    beam_search_output = question_gen_model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_length=72,
-        early_stopping=True,
-        num_beams=5,
-        num_return_sequences=min(number_of_questions, 4),
-    )
-
-    return [
-        question_gen_tokenizer.decode(
-            beam_output, skip_special_tokens=True, clean_up_tokenization_spaces=True
+    @staticmethod
+    def answer_question(question):
+        question = f"solve: {question}"
+        encoded_text = math_tokenizer.encode(question, return_tensors="pt")
+        model_output = math_model.generate(
+            encoded_text, do_sample=True, top_p=0.9, max_length=256
         )
-        for beam_output in beam_search_output
-    ]
+        answer = math_tokenizer.decode(model_output[0], skip_special_tokens=True)
+        answer = MathSolver.clean_up_calculations(answer)
+        return answer
 
+    @staticmethod
+    def extract_correct_boolean(text):
+        IS_CORRECT_PATTERN = r"is_correct: (true|false)"
 
-def extract_correct_boolean(text):
-    IS_CORRECT_PATTERN = r"is_correct: (true|false)"
+        match = re.search(IS_CORRECT_PATTERN, text, re.IGNORECASE)
 
-    match = re.search(IS_CORRECT_PATTERN, text, re.IGNORECASE)
+        if match:
+            return match.group(1).lower() == "true"
+        else:
+            return False
 
-    if match:
-        return match.group(1).lower() == "true"
-    else:
-        return False
+    @staticmethod
+    def get_majority_answer(possible_solutions):
+        ANSWER_PATTERN = r"The final answer is (\d+)"
 
+        final_answers = [
+            re.findall(ANSWER_PATTERN, solution)[0]
+            for solution in possible_solutions
+            if re.search(ANSWER_PATTERN, solution)
+        ]
 
-def generate_possible_solutions(question):
-    text = f"solve: {question}"
+        answer_count = {answer: final_answers.count(answer) for answer in final_answers}
 
-    encoding = math_tokenizer.encode_plus(
-        text, max_length=512, padding=True, return_tensors="pt"
-    )
-    input_ids, attention_mask = encoding["input_ids"], encoding["attention_mask"]
+        majority_answer = max(answer_count, key=answer_count.get)
 
-    math_model.eval()
+        correct_solutions = [
+            solution
+            for solution in possible_solutions
+            if "The final answer is " + majority_answer in solution
+        ]
 
-    beam_search_output = math_model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_length=72,
-        early_stopping=True,
-        num_beams=5,
-        num_return_sequences=5,
-    )
+        return random.choice(correct_solutions)
 
-    return beam_search_output
+    @staticmethod
+    def generate_possible_solutions(question):
+        text = f"solve: {question}"
 
-
-def get_majority_answer(possible_solutions):
-    ANSWER_PATTERN = r"The final answer is (\d+)"
-
-    final_answers = [
-        re.findall(ANSWER_PATTERN, solution)[0]
-        for solution in possible_solutions
-        if re.search(ANSWER_PATTERN, solution)
-    ]
-
-    answer_count = {answer: final_answers.count(answer) for answer in final_answers}
-
-    majority_answer = max(answer_count, key=answer_count.get)
-
-    correct_solutions = [
-        solution
-        for solution in possible_solutions
-        if "The final answer is " + majority_answer in solution
-    ]
-
-    return random.choice(correct_solutions)
-
-
-def verify_solution(question, answers):
-    possible_solutions = []
-    for possible_answer in answers:
-        formatted_text = f"verify: {possible_answer} question: {question}"
-        encoded_text = verifier_tokenizer.encode(formatted_text, return_tensors="pt")
-        model_output = verifier_model.generate(
-            encoded_text, do_sample=True, top_p=0.9, max_length=512
+        encoding = math_tokenizer.encode_plus(
+            text, max_length=512, padding=True, return_tensors="pt"
         )
-        verify_output = verifier_tokenizer.decode(
-            model_output[0], skip_special_tokens=True
+        input_ids, attention_mask = encoding["input_ids"], encoding["attention_mask"]
+
+        math_model.eval()
+
+        beam_search_output = math_model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=72,
+            early_stopping=True,
+            num_beams=5,
+            num_return_sequences=5,
         )
-        verify = extract_correct_boolean(verify_output)
 
-        if verify:
-            possible_solutions.append(possible_answer)
+        return beam_search_output
 
-    return get_majority_answer(possible_solutions), possible_solutions
+    @staticmethod
+    def verify_solution(question, answers):
+        possible_solutions = []
+        for possible_answer in answers:
+            formatted_text = f"verify: {possible_answer} question: {question}"
+            encoded_text = verifier_tokenizer.encode(
+                formatted_text, return_tensors="pt"
+            )
+            model_output = verifier_model.generate(
+                encoded_text, do_sample=True, top_p=0.9, max_length=512
+            )
+            verify_output = verifier_tokenizer.decode(
+                model_output[0], skip_special_tokens=True
+            )
+            verify = MathSolver.extract_correct_boolean(verify_output)
+
+            if verify:
+                possible_solutions.append(possible_answer)
+
+        return MathSolver.get_majority_answer(possible_solutions), possible_solutions
+
+
+class TextToQuestionGenerator:
+    def text_to_question(context, answer, number_of_questions):
+        text = f"context: {context} answer: {answer} </s>"
+
+        encoding = question_gen_tokenizer.encode_plus(
+            text, max_length=512, padding=True, return_tensors="pt"
+        )
+        input_ids, attention_mask = encoding["input_ids"], encoding["attention_mask"]
+
+        question_gen_model.eval()
+
+        beam_search_output = question_gen_model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=72,
+            early_stopping=True,
+            num_beams=5,
+            num_return_sequences=min(number_of_questions, 4),
+        )
+
+        return [
+            question_gen_tokenizer.decode(
+                beam_output, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )
+            for beam_output in beam_search_output
+        ]
 
 
 @app.get("/")
@@ -204,9 +209,10 @@ def index():
 def solve_math_problem(request: QuestionRequest):
     try:
         question = request.question
-        possible_answers = [answer_question(question) for _ in range(10)]
-        # possible_answers = generate_possible_solutions(question)
-        answer, possible_solutions = verify_solution(question, possible_answers)
+        possible_answers = [MathSolver.answer_question(question) for _ in range(10)]
+        answer, possible_solutions = MathSolver.verify_solution(
+            question, possible_answers
+        )
         return QuestionResponse(answer=answer, possible_solutions=possible_solutions)
     except Exception as e:
         return QuestionResponse(answer="SERVER ERROR " + str(e), possible_solutions=[])
@@ -218,7 +224,9 @@ def generate_question(request: TextToQuestionRequest):
         context = request.context
         answer = request.answer
         number_of_questions = request.number_of_questions
-        question = text_to_question(context, answer, number_of_questions)
+        question = TextToQuestionGenerator.text_to_question(
+            context, answer, number_of_questions
+        )
         return TextToQuestionResponse(question=question)
     except Exception as e:
         return TextToQuestionResponse(question="SERVER ERROR " + str(e))
