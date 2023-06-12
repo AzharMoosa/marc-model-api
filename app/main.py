@@ -53,7 +53,7 @@ verifier_model = AutoModelForSeq2SeqLM.from_pretrained(path_to_verifier_model)
 class MathSolver:
     @staticmethod
     def clean_up_calculations(text):
-        CALCULATOR_PATTERN = r"\d+[+/*x-]\d+=\d+>>\d+"
+        CALCULATOR_PATTERN = r"(\d+(\s*[-+*/]\s*\d+)*\s*=\s*\d+)\s*>>\s*(\d+)"
         FINAL_ANSWER_NUMBER_PATTERN = r"\d+\S*$"
         NO_SPACE_EQUATION_PATTERN = r"(\d+)([+\-*/])(\d+)"
 
@@ -65,14 +65,18 @@ class MathSolver:
 
         correct_answer = None
 
-        for notation in calculator_notation:
+        for calc_notation in calculator_notation:
             # Replace "X+Y=Z>>Z" To Evaluated Value "X+Y"
-            expression = notation.split(">>")
-            equation = expression[0].strip()
+            expression, _, final_answer = calc_notation
+            notation = expression + ">>" + final_answer
+            equation = expression.strip()
             lhs = equation.split("=")
             if not lhs:
                 continue
-            correct_answer = eval(lhs[0])
+            try:
+                correct_answer = eval(lhs[0])
+            except:
+                correct_answer = lhs[1] if len(lhs) == 2 else 0
             text = text.replace(notation, str(correct_answer))
 
         # Verify Final Answer Is Same As Final Calculation
@@ -83,17 +87,6 @@ class MathSolver:
         text = re.sub(NO_SPACE_EQUATION_PATTERN, r"\1 \2 \3", text)
 
         return text
-
-    @staticmethod
-    def answer_question(question):
-        question = f"solve: {question}"
-        encoded_text = math_tokenizer.encode(question, return_tensors="pt")
-        model_output = math_model.generate(
-            encoded_text, do_sample=True, top_p=0.9, max_length=256
-        )
-        answer = math_tokenizer.decode(model_output[0], skip_special_tokens=True)
-        answer = MathSolver.clean_up_calculations(answer)
-        return answer
 
     @staticmethod
     def extract_correct_boolean(text):
@@ -107,26 +100,43 @@ class MathSolver:
             return False
 
     @staticmethod
+    def answer_question(question):
+        question = f"solve: {question}"
+        encoded_text = math_tokenizer.encode(question, return_tensors="pt")
+        model_output = math_model.generate(
+            encoded_text, do_sample=True, top_p=0.9, max_length=256
+        )
+        answer = math_tokenizer.decode(model_output[0], skip_special_tokens=True)
+        answer = MathSolver.clean_up_calculations(answer)
+        return answer
+
+    @staticmethod
     def get_majority_answer(possible_solutions):
-        ANSWER_PATTERN = r"The final answer is (\d+)"
+        try:
+            ANSWER_PATTERN = r"The final answer is (\d+)"
 
-        final_answers = [
-            re.findall(ANSWER_PATTERN, solution)[0]
-            for solution in possible_solutions
-            if re.search(ANSWER_PATTERN, solution)
-        ]
+            final_answers = [
+                re.findall(ANSWER_PATTERN, solution)[0]
+                for solution in possible_solutions
+                if re.search(ANSWER_PATTERN, solution)
+            ]
 
-        answer_count = {answer: final_answers.count(answer) for answer in final_answers}
+            answer_count = {
+                answer: final_answers.count(answer) for answer in final_answers
+            }
 
-        majority_answer = max(answer_count, key=answer_count.get)
+            majority_answer = max(answer_count, key=answer_count.get, default=0)
 
-        correct_solutions = [
-            solution
-            for solution in possible_solutions
-            if "The final answer is " + majority_answer in solution
-        ]
+            correct_solutions = [
+                solution
+                for solution in possible_solutions
+                if "The final answer is " + majority_answer in solution
+            ]
 
-        return random.choice(correct_solutions)
+            return random.choice(correct_solutions)
+        except:
+            print("MAJORITY_ANSWER COULD NOT BE COMPUTED")
+            return random.choice(possible_solutions)
 
     @staticmethod
     def generate_possible_solutions(question):
@@ -144,11 +154,57 @@ class MathSolver:
             attention_mask=attention_mask,
             max_length=72,
             early_stopping=True,
-            num_beams=5,
-            num_return_sequences=5,
+            num_beams=50,
+            num_return_sequences=50,
         )
 
-        return beam_search_output
+        return [
+            MathSolver.clean_up_calculations(
+                math_tokenizer.decode(
+                    beam_output,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True,
+                )
+            )
+            for beam_output in beam_search_output
+        ]
+
+    @staticmethod
+    def verify_solutions_beam_search(question, answers):
+        possible_solutions = []
+        for possible_answer in answers:
+            formatted_text = f"verify: {possible_answer} question: {question}"
+            encoding = verifier_tokenizer.encode_plus(
+                formatted_text, max_length=512, padding=True, return_tensors="pt"
+            )
+            input_ids, attention_mask = (
+                encoding["input_ids"],
+                encoding["attention_mask"],
+            )
+
+            verifier_model.eval()
+
+            beam_search_output = verifier_model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_length=72,
+                early_stopping=True,
+                num_beams=50,
+                num_return_sequences=1,
+            )
+
+            verify_output = math_tokenizer.decode(
+                beam_search_output[0],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+
+            verify = MathSolver.extract_correct_boolean(verify_output)
+
+            if verify:
+                possible_solutions.append(possible_answer)
+
+        return MathSolver.get_majority_answer(possible_solutions), possible_solutions
 
     @staticmethod
     def verify_solution(question, answers):
@@ -209,7 +265,7 @@ def index():
 def solve_math_problem(request: QuestionRequest):
     try:
         question = request.question
-        possible_answers = [MathSolver.answer_question(question) for _ in range(10)]
+        possible_answers = [MathSolver.answer_question(question) for _ in range(15)]
         answer, possible_solutions = MathSolver.verify_solution(
             question, possible_answers
         )
