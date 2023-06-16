@@ -1,11 +1,17 @@
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from pathlib import Path
 import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
 import re
 import random
+import datetime
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+load_dotenv()
+
+client = MongoClient(os.getenv("MONGODB_URI"), serverSelectionTimeoutMS=5000)
 
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
 
@@ -14,6 +20,7 @@ app = FastAPI()
 
 class QuestionRequest(BaseModel):
     question: str
+    use_cache: bool = True
 
 
 class QuestionResponse(BaseModel):
@@ -265,10 +272,39 @@ def index():
 def solve_math_problem(request: QuestionRequest):
     try:
         question = request.question
-        possible_answers = [MathSolver.answer_question(question) for _ in range(15)]
+        use_cache = request.use_cache
+        db = client["Solutions"]
+        cache = db["cache"]
+
+        # Check If Question Is Cached
+        cached_question = cache.find_one({"question": question})
+        cache_time = datetime.datetime.now() - datetime.timedelta(days=1)
+
+        if use_cache and cached_question and (cached_question["date"] >= cache_time):
+            return QuestionResponse(
+                answer=cached_question["answer"],
+                possible_solutions=cached_question["possible_solutions"],
+            )
+
+        possible_answers = [MathSolver.answer_question(question) for _ in range(10)]
         answer, possible_solutions = MathSolver.verify_solution(
             question, possible_answers
         )
+
+        cache_result = {
+            "question": question,
+            "answer": answer,
+            "possible_solutions": possible_solutions,
+            "date": datetime.datetime.today(),
+        }
+
+        if cached_question and (cached_question["date"] < cache_time):
+            cache.update_one(
+                {"question": question}, {"$set": cache_result}, upsert=False
+            )
+        else:
+            cache.insert_one(cache_result)
+
         return QuestionResponse(answer=answer, possible_solutions=possible_solutions)
     except Exception as e:
         return QuestionResponse(answer="SERVER ERROR " + str(e), possible_solutions=[])
@@ -286,3 +322,36 @@ def generate_question(request: TextToQuestionRequest):
         return TextToQuestionResponse(question=question)
     except Exception as e:
         return TextToQuestionResponse(question="SERVER ERROR " + str(e))
+
+
+if __name__ == "__main__":
+    question = "On a farm, there are seven free range chickens that need to be distributed evenly into seven pens. What is the number of free range chickens that will be kept in each pen?"
+
+    db = client["Solutions"]
+    cache = db["cache"]
+
+    cached_question = cache.find_one({"question": question})
+
+    cache_time = datetime.datetime.now() - datetime.timedelta(seconds=50)
+
+    if cached_question and (cached_question["date"] >= cache_time):
+        print("Cached " + cached_question["answer"])
+    else:
+        # possible_answers = [MathSolver.answer_question(question) for _ in range(10)]
+        # answer, possible_solutions = MathSolver.verify_solution(question, possible_answers)
+        answer = "Answer"
+        possible_solutions = ["Possible Answer"]
+
+        cache_result = {
+            "question": question,
+            "answer": answer,
+            "possible_solutions": possible_solutions,
+            "date": datetime.datetime.today(),
+        }
+
+        if cached_question and (cached_question["date"] < cache_time):
+            cache.update_one(
+                {"question": question}, {"$set": cache_result}, upsert=False
+            )
+        else:
+            cache.insert_one(cache_result)
