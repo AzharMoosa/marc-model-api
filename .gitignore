@@ -62,4 +62,4 @@ app/**/model/
 app/**/tokenizer/
 app/marc
 
-deploy.sh
+/deploy.sh

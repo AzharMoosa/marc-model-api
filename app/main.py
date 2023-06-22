@@ -271,22 +271,28 @@ def index():
 @app.post("/solve-math-problem", response_model=QuestionResponse)
 def solve_math_problem(request: QuestionRequest):
     try:
-        question = request.question
+        question = request.question.strip().lower()
         use_cache = request.use_cache
         db = client["Solutions"]
         cache = db["cache"]
 
         # Check If Question Is Cached
-        cached_question = cache.find_one({"question": question})
+        cache.create_index([("question", "text")])
+        cached_question = cache.find_one({"$text": {"$search": question}})
         cache_time = datetime.datetime.now() - datetime.timedelta(days=1)
 
-        if use_cache and cached_question and (cached_question["date"] >= cache_time):
+        if (
+            use_cache
+            and cached_question
+            and re.search(cached_question["question"], question, re.IGNORECASE)
+            and (cached_question["date"] >= cache_time)
+        ):
             return QuestionResponse(
                 answer=cached_question["answer"],
                 possible_solutions=cached_question["possible_solutions"],
             )
 
-        possible_answers = [MathSolver.answer_question(question) for _ in range(10)]
+        possible_answers = [MathSolver.answer_question(question) for _ in range(30)]
         answer, possible_solutions = MathSolver.verify_solution(
             question, possible_answers
         )
@@ -322,36 +328,3 @@ def generate_question(request: TextToQuestionRequest):
         return TextToQuestionResponse(question=question)
     except Exception as e:
         return TextToQuestionResponse(question="SERVER ERROR " + str(e))
-
-
-if __name__ == "__main__":
-    question = "On a farm, there are seven free range chickens that need to be distributed evenly into seven pens. What is the number of free range chickens that will be kept in each pen?"
-
-    db = client["Solutions"]
-    cache = db["cache"]
-
-    cached_question = cache.find_one({"question": question})
-
-    cache_time = datetime.datetime.now() - datetime.timedelta(seconds=50)
-
-    if cached_question and (cached_question["date"] >= cache_time):
-        print("Cached " + cached_question["answer"])
-    else:
-        # possible_answers = [MathSolver.answer_question(question) for _ in range(10)]
-        # answer, possible_solutions = MathSolver.verify_solution(question, possible_answers)
-        answer = "Answer"
-        possible_solutions = ["Possible Answer"]
-
-        cache_result = {
-            "question": question,
-            "answer": answer,
-            "possible_solutions": possible_solutions,
-            "date": datetime.datetime.today(),
-        }
-
-        if cached_question and (cached_question["date"] < cache_time):
-            cache.update_one(
-                {"question": question}, {"$set": cache_result}, upsert=False
-            )
-        else:
-            cache.insert_one(cache_result)
