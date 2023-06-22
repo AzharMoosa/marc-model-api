@@ -274,12 +274,12 @@ def solve_math_problem(request: QuestionRequest):
         question = request.question.strip().lower()
         use_cache = request.use_cache
         db = client["Solutions"]
-        cache = db["cache"]
+        cache = db.cache
 
         # Check If Question Is Cached
         cache.create_index([("question", "text")])
         cached_question = cache.find_one({"$text": {"$search": question}})
-        cache_time = datetime.datetime.now() - datetime.timedelta(days=1)
+        cache_time = datetime.datetime.now() - datetime.timedelta(days=5)
 
         if (
             use_cache
